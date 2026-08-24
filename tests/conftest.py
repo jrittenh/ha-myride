@@ -1,4 +1,5 @@
 import sys
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, AsyncMock
 
 # Stub out the homeassistant hierarchy to allow tests to run without the full HA package.
@@ -26,6 +27,34 @@ class MockConfigFlow:
             "data": data,
         }
 
+# Define homeassistant.util.dt mock
+class MockDtUtil:
+    UTC = timezone.utc
+
+    def now(self) -> datetime:
+        return datetime.now(self.UTC)
+
+    def parse_datetime(self, time_str: str) -> datetime:
+        if time_str.endswith("Z"):
+            time_str = time_str[:-1] + "+00:00"
+        return datetime.fromisoformat(time_str)
+
+# Define a real class for DataUpdateCoordinator to avoid subclassing MagicMock
+class MockDataUpdateCoordinator:
+    def __init__(self, hass, logger, name, update_interval=None):
+        self.hass = hass
+        self.logger = logger
+        self.name = name
+        self.update_interval = update_interval
+        self.data = None
+
+    @classmethod
+    def __class_getitem__(cls, item):
+        return cls
+
+    async def async_config_entry_first_refresh(self):
+        self.data = await self._async_update_data()
+
 # Define and register mocks
 ha_config_entries = MagicMock()
 ha_config_entries.ConfigFlow = MockConfigFlow
@@ -33,16 +62,22 @@ ha_config_entries.ConfigFlow = MockConfigFlow
 ha_helpers = MagicMock()
 ha_helpers.aiohttp_client = MagicMock()
 ha_helpers.update_coordinator = MagicMock()
+ha_helpers.update_coordinator.DataUpdateCoordinator = MockDataUpdateCoordinator
 
 ha_const = MagicMock()
 ha_const.CONF_USERNAME = "username"
 ha_const.CONF_PASSWORD = "password"
 
-# Set up main homeassistant mock
+# Set up main homeassistant mock tree to resolve attribute lookup paths correctly
+ha_dt_util = MockDtUtil()
+ha_util = MagicMock()
+ha_util.dt = ha_dt_util
+
 ha_mock = MagicMock()
 ha_mock.config_entries = ha_config_entries
 ha_mock.helpers = ha_helpers
 ha_mock.const = ha_const
+ha_mock.util = ha_util
 
 # Register all modules
 sys.modules["homeassistant"] = ha_mock
@@ -53,3 +88,7 @@ sys.modules["homeassistant.helpers.aiohttp_client"] = ha_helpers.aiohttp_client
 sys.modules["homeassistant.helpers.update_coordinator"] = ha_helpers.update_coordinator
 sys.modules["homeassistant.const"] = ha_const
 sys.modules["homeassistant.exceptions"] = MagicMock()
+
+# Register util and util.dt
+sys.modules["homeassistant.util"] = ha_util
+sys.modules["homeassistant.util.dt"] = ha_dt_util
