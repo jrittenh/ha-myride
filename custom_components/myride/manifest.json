@@ -6,5 +6,5 @@
   "documentation": "https://github.com/jrittenh/ha-myride",
   "iot_class": "cloud_polling",
   "requirements": ["pyjwt>=2.8.0"],
-  "version": "1.0.0"
+  "version": "0.1.0"
 }
