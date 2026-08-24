@@ -1,0 +1,21 @@
+[project]
+name = "ha-myride"
+version = "0.1.0"
+description = "Home Assistant custom integration for My Ride K-12 school bus tracking"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.9.0",
+    "pyjwt>=2.8.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "aioresponses>=0.7.6",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

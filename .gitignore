@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+test_credentials.json
+.DS_Store
+*.dll
+*.wasm
+*.dat
+*.mp4
+*.gif
+*.svg
+*.png
+framework_files/
+extracted_dlls/
+decompiled/
+dotnet_clean.js
