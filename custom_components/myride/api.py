@@ -63,7 +63,7 @@ class MyRideAPI:
         
         try:
             async with session.post(COGNITO_URL, json=payload, headers=headers) as resp:
-                resp_json = await resp.json()
+                resp_json = await resp.json(content_type=None)
                 
                 if resp.status != 200:
                     error_type = resp_json.get("__type")
@@ -122,7 +122,7 @@ class MyRideAPI:
                     _LOGGER.error("Failed to fetch students. Status: %s", resp.status)
                     raise MyRideAPIError(f"API Error fetching students: {msg}")
                 
-                data = await resp.json()
+                data = await resp.json(content_type=None)
                 
                 # Post-process models to add convenience properties matching standard schema
                 # e.g., mapping RolloutBusNumber ?? AssetUniqueId to ActiveVehicle
@@ -156,7 +156,7 @@ class MyRideAPI:
                     _LOGGER.error("Failed to fetch buses. Status: %s", resp.status)
                     raise MyRideAPIError(f"API Error fetching buses: {msg}")
                 
-                return await resp.json()
+                return await resp.json(content_type=None)
                 
         except aiohttp.ClientError as err:
             _LOGGER.error("Network error fetching buses: %s", err)

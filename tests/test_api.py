@@ -19,7 +19,7 @@ class MockResponse:
         self._json_data = json_data or {}
         self._text_data = text_data
 
-    async def json(self):
+    async def json(self, *args, **kwargs):
         return self._json_data
 
     async def text(self):
