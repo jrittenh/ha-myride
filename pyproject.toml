@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.9.0",
     "pyjwt>=2.8.0",
+    "voluptuous>=0.13.0",
 ]
 
 [dependency-groups]
