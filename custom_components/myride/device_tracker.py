@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, get_field
 from .__init__ import MyRideDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -22,14 +22,16 @@ async def async_setup_entry(
     coordinator: MyRideDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities = []
 
-    students = coordinator.data.get("students", [])
+    students = get_field(coordinator.data, "students", [])
     tracked_vehicles = set()
 
     for student in students:
-        student_id = student.get("StudentId")
-        for run in student.get("RunInfo", []):
-            run_id = run.get("RunId")
-            vehicle_id = run.get("ActiveVehicle")
+        student_id = get_field(student, "studentId")
+        run_info = get_field(student, "runInfo", [])
+        
+        for run in run_info:
+            run_id = get_field(run, "runId")
+            vehicle_id = get_field(run, "activeVehicle")
             
             if not vehicle_id or not run_id:
                 continue
@@ -61,8 +63,8 @@ class MyRideBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], TrackerEn
 
     def _get_bus_data(self) -> Optional[Dict[str, Any]]:
         """Retrieve bus location data from coordinator data."""
-        buses = self.coordinator.data.get("buses", [])
-        return next((b for b in buses if b.get("AssetUniqueId") == self.vehicle_id), None)
+        buses = get_field(self.coordinator.data, "buses", [])
+        return next((b for b in buses if get_field(b, "assetUniqueId") == self.vehicle_id), None)
 
     @property
     def name(self) -> str:
@@ -79,7 +81,7 @@ class MyRideBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], TrackerEn
         """Return latitude value of the bus."""
         bus = self._get_bus_data()
         if bus:
-            return bus.get("Latitude")
+            return get_field(bus, "latitude")
         return None
 
     @property
@@ -87,7 +89,7 @@ class MyRideBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], TrackerEn
         """Return longitude value of the bus."""
         bus = self._get_bus_data()
         if bus:
-            return bus.get("Longitude")
+            return get_field(bus, "longitude")
         return None
 
     @property
@@ -103,9 +105,9 @@ class MyRideBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], TrackerEn
         if not bus:
             return attrs
 
-        attrs["speed"] = bus.get("Speed")
-        attrs["heading"] = bus.get("Heading")
-        attrs["last_log_time"] = bus.get("LogTime")
-        attrs["visible_run_name"] = bus.get("VisibleRunName")
+        attrs["speed"] = get_field(bus, "speed")
+        attrs["heading"] = get_field(bus, "heading")
+        attrs["last_log_time"] = get_field(bus, "logTime")
+        attrs["visible_run_name"] = get_field(bus, "visibleRunName")
         
         return attrs

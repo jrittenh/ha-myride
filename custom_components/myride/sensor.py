@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, get_field
 from .__init__ import MyRideDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,13 +35,18 @@ async def async_setup_entry(
     coordinator: MyRideDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities = []
 
-    students = coordinator.data.get("students", [])
+    students = get_field(coordinator.data, "students", [])
     for student in students:
-        student_id = student.get("StudentId")
-        student_name = f"{student.get('FirstName', '')} {student.get('LastName', '')}".strip()
+        student_id = get_field(student, "studentId")
+        if student_id is None:
+            continue
+        first_name = get_field(student, "firstName", "")
+        last_name = get_field(student, "lastName", "")
+        student_name = f"{first_name} {last_name}".strip()
         
-        for run in student.get("RunInfo", []):
-            run_id = run.get("RunId")
+        run_info = get_field(student, "runInfo", [])
+        for run in run_info:
+            run_id = get_field(run, "runId")
             if run_id is None:
                 continue
 
@@ -69,15 +74,16 @@ class MyRideBaseSensor(CoordinatorEntity[MyRideDataUpdateCoordinator], SensorEnt
 
     def _get_student(self) -> Optional[Dict[str, Any]]:
         """Retrieve student record from coordinator data."""
-        students = self.coordinator.data.get("students", [])
-        return next((s for s in students if s.get("StudentId") == self.student_id), None)
+        students = get_field(self.coordinator.data, "students", [])
+        return next((s for s in students if get_field(s, "studentId") == self.student_id), None)
 
     def _get_run(self) -> Optional[Dict[str, Any]]:
         """Retrieve run record from student."""
         student = self._get_student()
         if not student:
             return None
-        return next((r for r in student.get("RunInfo", []) if r.get("RunId") == self.run_id), None)
+        run_info = get_field(student, "runInfo", [])
+        return next((r for r in run_info if get_field(r, "runId") == self.run_id), None)
 
 
 class MyRideNextStopSensor(MyRideBaseSensor):
@@ -100,15 +106,13 @@ class MyRideNextStopSensor(MyRideBaseSensor):
         if not run:
             return None
             
-        stops = run.get("StopsInfo", [])
+        stops = get_field(run, "stopsInfo", [])
         if not stops:
             return "No Stops"
 
         # Find the next incomplete stop, or default to first
-        # In this API, StopsInfo is chronological.
-        # Let's return the first stop's name for simplicity or parse
         first_stop = stops[0]
-        return first_stop.get("LocationName") or first_stop.get("StopDescription") or first_stop.get("StopAddressFull")
+        return get_field(first_stop, "locationName") or get_field(first_stop, "stopDescription") or get_field(first_stop, "stopAddressFull")
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
@@ -118,16 +122,16 @@ class MyRideNextStopSensor(MyRideBaseSensor):
         if not run:
             return attrs
 
-        stops = run.get("StopsInfo", [])
+        stops = get_field(run, "stopsInfo", [])
         if stops:
             first_stop = stops[0]
-            attrs["planned_time"] = first_stop.get("PlannedStopTime") or first_stop.get("StopTime")
-            attrs["eta_minutes"] = first_stop.get("EtaMinutes", 0)
-            attrs["stop_address"] = first_stop.get("StopAddressFull")
-            attrs["stop_id"] = first_stop.get("StopId")
+            attrs["planned_time"] = get_field(first_stop, "plannedStopTime") or get_field(first_stop, "stopTime")
+            attrs["eta_minutes"] = get_field(first_stop, "etaMinutes", 0)
+            attrs["stop_address"] = get_field(first_stop, "stopAddressFull")
+            attrs["stop_id"] = get_field(first_stop, "stopId")
             
-        attrs["bus_number"] = run.get("BusNumber")
-        attrs["route_name"] = run.get("RunName") or run.get("RunDescription")
+        attrs["bus_number"] = get_field(run, "busNumber")
+        attrs["route_name"] = get_field(run, "runName") or get_field(run, "runDescription")
         
         return attrs
 
@@ -151,7 +155,7 @@ class MyRideBusStatusSensor(MyRideBaseSensor):
         run = self._get_run()
         if not run:
             return "Unknown"
-        status_code = run.get("VehicleStatus", 0)
+        status_code = get_field(run, "vehicleStatus", 0)
         return STATUS_MAPPING.get(status_code, "Unknown")
 
     @property
@@ -162,7 +166,7 @@ class MyRideBusStatusSensor(MyRideBaseSensor):
         if not run:
             return attrs
 
-        attrs["bus_number"] = run.get("BusNumber")
-        attrs["driver_name"] = run.get("DriverName") or run.get("RolloutDriverName")
+        attrs["bus_number"] = get_field(run, "busNumber")
+        attrs["driver_name"] = get_field(run, "driverName") or get_field(run, "rolloutDriverName")
         
         return attrs

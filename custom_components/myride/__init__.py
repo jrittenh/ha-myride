@@ -15,6 +15,7 @@ from .const import (
     CONF_DISTRICT_ID,
     DEFAULT_POLL_INTERVAL_ACTIVE,
     DEFAULT_POLL_INTERVAL_PASSIVE,
+    get_field,
 )
 from .api import MyRideAPI, MyRideAuthError, MyRideAPIError
 
@@ -94,14 +95,15 @@ class MyRideDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         # 2. Check for active routes
         has_active_run = False
         for student in students:
-            for run in student.get("RunInfo", []):
-                stops = run.get("StopsInfo", [])
+            run_info = get_field(student, "runInfo", [])
+            for run in run_info:
+                stops = get_field(run, "stopsInfo", [])
                 if not stops:
                     continue
 
                 stop_times = []
                 for stop in stops:
-                    time_str = stop.get("PlannedStopTime") or stop.get("StopTime")
+                    time_str = get_field(stop, "plannedStopTime") or get_field(stop, "stopTime")
                     if time_str:
                         try:
                             parsed_dt = dt_util.parse_datetime(time_str)
@@ -117,7 +119,7 @@ class MyRideDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
                 end_time = max(stop_times)
 
                 # Check if running today
-                running_days = run.get("RunningDays", [])
+                running_days = get_field(run, "runningDays", [])
                 is_running_today = False
                 today_date_str = now.date().isoformat()
 
@@ -128,7 +130,7 @@ class MyRideDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 
                 if not running_days:
                     # Fallback to weekday matching (MTWRF)
-                    days_str = run.get("Days") or ""
+                    days_str = get_field(run, "days") or ""
                     weekday_map = {0: "M", 1: "T", 2: "W", 3: "R", 4: "F", 5: "S", 6: "U"}
                     current_weekday_char = weekday_map[now.weekday()]
                     if current_weekday_char in days_str:
@@ -165,9 +167,9 @@ class MyRideDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             except MyRideAPIError as err:
                 _LOGGER.warning("Could not fetch active bus locations: %s", err)
                 # Keep previous data if fetch fails during transient network issues
-                buses = self.data.get("buses", []) if self.data else []
+                buses = get_field(self.data, "buses", []) if self.data else []
         else:
-            buses = self.data.get("buses", []) if self.data else []
+            buses = get_field(self.data, "buses", []) if self.data else []
 
         return {
             "students": students,

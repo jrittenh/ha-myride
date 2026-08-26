@@ -126,11 +126,14 @@ class MyRideAPI:
                 
                 # Post-process models to add convenience properties matching standard schema
                 # e.g., mapping RolloutBusNumber ?? AssetUniqueId to ActiveVehicle
+                from .const import get_field
                 for student in data:
-                    for run in student.get("RunInfo", []):
-                        rollout = run.get("RolloutBusNumber")
-                        asset = run.get("AssetUniqueId")
+                    run_info = get_field(student, "runInfo", [])
+                    for run in run_info:
+                        rollout = get_field(run, "rolloutBusNumber")
+                        asset = get_field(run, "assetUniqueId")
                         run["ActiveVehicle"] = rollout if rollout else asset
+                        run["activeVehicle"] = rollout if rollout else asset
                 
                 return data
                 
