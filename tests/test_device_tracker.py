@@ -44,7 +44,7 @@ async def test_device_tracker_states():
     
     coordinator = create_mock_coordinator(student_data, bus_data)
     
-    tracker = MyRideBusTracker(coordinator, student_id=111, run_id=999, vehicle_id="VEHICLE42")
+    tracker = MyRideBusTracker(coordinator, vehicle_id="VEHICLE42")
     
     assert tracker.name == "My Ride K-12 Bus VEHICLE42"
     assert tracker.latitude == 34.0530

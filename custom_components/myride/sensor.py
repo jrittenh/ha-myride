@@ -92,7 +92,10 @@ class MyRideNextStopSensor(MyRideBaseSensor):
     @property
     def name(self) -> str:
         """Return the name of the sensor."""
-        return f"{self.student_name} Next Bus Stop"
+        run = self._get_run()
+        run_name = get_field(run, "runName") if run else None
+        suffix = f" ({run_name})" if run_name else ""
+        return f"{self.student_name} Next Bus Stop{suffix}"
 
     @property
     def unique_id(self) -> str:
@@ -142,7 +145,10 @@ class MyRideBusStatusSensor(MyRideBaseSensor):
     @property
     def name(self) -> str:
         """Return the name of the sensor."""
-        return f"{self.student_name} Bus Status"
+        run = self._get_run()
+        run_name = get_field(run, "runName") if run else None
+        suffix = f" ({run_name})" if run_name else ""
+        return f"{self.student_name} Bus Status{suffix}"
 
     @property
     def unique_id(self) -> str:

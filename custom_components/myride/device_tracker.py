@@ -26,21 +26,16 @@ async def async_setup_entry(
     tracked_vehicles = set()
 
     for student in students:
-        student_id = get_field(student, "studentId")
         run_info = get_field(student, "runInfo", [])
-        
         for run in run_info:
-            run_id = get_field(run, "runId")
             vehicle_id = get_field(run, "activeVehicle")
-            
-            if not vehicle_id or not run_id:
+            if not vehicle_id:
                 continue
 
-            # Avoid adding duplicate trackers for the same vehicle across different students
-            key = (student_id, run_id, vehicle_id)
-            if key not in tracked_vehicles:
-                entities.append(MyRideBusTracker(coordinator, student_id, run_id, vehicle_id))
-                tracked_vehicles.add(key)
+            # Deduplicate by vehicle_id so we only register one tracker per physical bus
+            if vehicle_id not in tracked_vehicles:
+                entities.append(MyRideBusTracker(coordinator, vehicle_id))
+                tracked_vehicles.add(vehicle_id)
 
     async_add_entities(entities)
 
@@ -51,14 +46,10 @@ class MyRideBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], TrackerEn
     def __init__(
         self,
         coordinator: MyRideDataUpdateCoordinator,
-        student_id: int,
-        run_id: int,
         vehicle_id: str
     ) -> None:
         """Initialize bus tracker."""
         super().__init__(coordinator)
-        self.student_id = student_id
-        self.run_id = run_id
         self.vehicle_id = vehicle_id
 
     def _get_bus_data(self) -> Optional[Dict[str, Any]]:
@@ -74,7 +65,7 @@ class MyRideBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], TrackerEn
     @property
     def unique_id(self) -> str:
         """Return a unique ID for this tracker."""
-        return f"myride_{self.student_id}_{self.run_id}_{self.vehicle_id}_tracker"
+        return f"myride_{self.vehicle_id}_tracker"
 
     @property
     def latitude(self) -> Optional[float]:
