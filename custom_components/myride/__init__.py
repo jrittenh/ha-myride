@@ -73,7 +73,7 @@ class MyRideDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         self.api = api
         self.username = username
         self.password = password
-        self.last_bus_fetch: datetime = datetime.min.replace(tzinfo=dt_util.UTC)
+        self.last_bus_fetch: datetime = dt_util.now() - timedelta(days=1)
 
     async def _async_update_data(self) -> Dict[str, Any]:
         """Fetch latest student and bus data dynamically."""
@@ -108,7 +108,18 @@ class MyRideDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
                         try:
                             parsed_dt = dt_util.parse_datetime(time_str)
                             if parsed_dt:
-                                stop_times.append(parsed_dt)
+                                # Construct timezone-aware stop time for today
+                                stop_time_today = datetime(
+                                    year=now.year,
+                                    month=now.month,
+                                    day=now.day,
+                                    hour=parsed_dt.hour,
+                                    minute=parsed_dt.minute,
+                                    second=parsed_dt.second,
+                                    microsecond=parsed_dt.microsecond,
+                                    tzinfo=now.tzinfo
+                                )
+                                stop_times.append(stop_time_today)
                         except Exception: # pylint: disable=broad-except
                             pass
 
