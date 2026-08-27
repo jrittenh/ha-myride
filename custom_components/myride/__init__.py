@@ -1,7 +1,10 @@
 """The My Ride K-12 integration."""
 import logging
+import asyncio
+import aiohttp
+import json
 from datetime import timedelta, datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_USERNAME, CONF_PASSWORD, Platform
@@ -47,6 +50,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
+    # Start the real-time SignalR WebSocket listener
+    coordinator.start_signalr()
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
@@ -55,7 +61,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
+        coordinator = hass.data[DOMAIN].pop(entry.entry_id)
+        await coordinator.stop_signalr()
     return unload_ok
 
 
@@ -74,6 +81,165 @@ class MyRideDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         self.username = username
         self.password = password
         self.last_bus_fetch: datetime = dt_util.now() - timedelta(days=1)
+        self.buses: Dict[str, Dict[str, Any]] = {}
+        self.signalr_connected = False
+        self._signalr_task: Optional[asyncio.Task] = None
+
+    def start_signalr(self) -> None:
+        """Start the SignalR background task."""
+        self._signalr_task = self.hass.async_create_background_task(
+            self._async_run_signalr(),
+            "myride_signalr"
+        )
+
+    async def stop_signalr(self) -> None:
+        """Stop the SignalR background task."""
+        if self._signalr_task:
+            self._signalr_task.cancel()
+            try:
+                await self._signalr_task
+            except asyncio.CancelledError:
+                pass
+            self._signalr_task = None
+
+    async def _async_run_signalr(self) -> None:
+        """Maintain real-time SignalR connection for bus coordinates and ETAs."""
+        _LOGGER.info("Starting My Ride K-12 SignalR background task")
+        backoff = 1
+        
+        while True:
+            try:
+                # 1. Negotiate connection
+                session = await self.api._get_session()
+                negotiate_url = f"https://myridek12.tylerapi.com/livevehiclehub/negotiate?x-tenant-id={self.api.district_id}"
+                headers = self.api._get_headers()
+                
+                async with session.post(negotiate_url, headers=headers) as resp:
+                    if resp.status != 200:
+                        raise MyRideAPIError(f"SignalR negotiation failed with status {resp.status}")
+                    neg_data = await resp.json(content_type=None)
+                    
+                connection_token = neg_data.get("connectionToken") or neg_data.get("connectionId")
+                if not connection_token:
+                    raise MyRideAPIError("Failed to obtain connection token during negotiation")
+                
+                # 2. Establish WebSocket connection
+                ws_url = f"wss://myridek12.tylerapi.com/livevehiclehub?x-tenant-id={self.api.district_id}&id={connection_token}"
+                _LOGGER.info("Connecting to My Ride K-12 live tracking WebSocket")
+                
+                async with session.ws_connect(ws_url, headers=headers, heartbeat=15) as ws:
+                    _LOGGER.info("WebSocket connected, sending handshake")
+                    backoff = 1  # Reset reconnect backoff on successful connection
+                    self.signalr_connected = True
+                    
+                    # Send handshake
+                    handshake = {"protocol": "json", "version": 1}
+                    await ws.send_str(json.dumps(handshake) + "\x1e")
+                    
+                    # Read messages loop
+                    async for msg in ws:
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            parts = msg.data.split("\x1e")
+                            for part in parts:
+                                if not part:
+                                    continue
+                                try:
+                                    data = json.loads(part)
+                                except Exception:
+                                    continue
+                                
+                                # Handle message type
+                                msg_type = data.get("type")
+                                if msg_type == 6:  # Ping
+                                    # Respond with a ping to keep connection alive
+                                    await ws.send_str('{"type":6}\x1e')
+                                elif msg_type == 1:  # Invocation (Event)
+                                    target = data.get("target")
+                                    args = data.get("arguments", [])
+                                    if target == "NewLocation" and args:
+                                        self._handle_new_location(args[0])
+                                    elif target == "NewETA" and args:
+                                        self._handle_new_eta(args[0])
+                                        
+                        elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                            _LOGGER.warning("WebSocket connection closed or error occurred")
+                            break
+                            
+            except asyncio.CancelledError:
+                _LOGGER.info("SignalR background task cancelled")
+                self.signalr_connected = False
+                break
+            except Exception as err:
+                _LOGGER.error("Error in SignalR connection: %s", err)
+                self.signalr_connected = False
+                
+            # Reconnect delay with exponential backoff capped at 60s
+            _LOGGER.info("Attempting reconnection in %s seconds...", backoff)
+            try:
+                await asyncio.sleep(backoff)
+            except asyncio.CancelledError:
+                break
+            backoff = min(60, backoff * 2)
+
+    def _handle_new_location(self, bus_status: Dict[str, Any]) -> None:
+        """Handle real-time bus location update."""
+        asset_unique_id = get_field(bus_status, "assetUniqueId")
+        if not asset_unique_id:
+            return
+            
+        _LOGGER.debug("Received live bus location for %s", asset_unique_id)
+        self.buses[asset_unique_id] = bus_status
+        self.data["buses"] = list(self.buses.values())
+        
+        # Notify Home Assistant that data has updated
+        self.async_update_listeners()
+
+    def _handle_new_eta(self, stop_eta: Dict[str, Any]) -> None:
+        """Handle real-time stop ETA update."""
+        run_id = get_field(stop_eta, "runId")
+        stop_id = get_field(stop_eta, "stopId")
+        eta_str = get_field(stop_eta, "eta")
+        planned_str = get_field(stop_eta, "plannedTime")
+        
+        if run_id is None or stop_id is None or not eta_str:
+            return
+            
+        _LOGGER.debug("Received live ETA for run %s stop %s", run_id, stop_id)
+        
+        # Calculate new eta_minutes
+        try:
+            eta_dt = dt_util.parse_datetime(eta_str)
+            if not eta_dt:
+                return
+            now = dt_util.now()
+            # If naive, localize
+            if eta_dt.tzinfo is None:
+                eta_dt = eta_dt.replace(tzinfo=now.tzinfo)
+            # Calculate difference in minutes
+            diff = (eta_dt - now).total_seconds() / 60.0
+            eta_minutes = max(0, int(diff))
+        except Exception as err:
+            _LOGGER.error("Failed to parse live ETA time: %s", err)
+            return
+
+        # Update matching stop in memory
+        updated = False
+        students = self.data.get("students", [])
+        for student in students:
+            run_info = get_field(student, "runInfo", [])
+            for run in run_info:
+                if get_field(run, "runId") == run_id:
+                    stops = get_field(run, "stopsInfo", [])
+                    for stop in stops:
+                        if get_field(stop, "stopId") == stop_id:
+                            # Update stopTime to the new ETA timestamp
+                            stop["stopTime"] = eta_str
+                            stop["etaMinutes"] = eta_minutes
+                            updated = True
+                            
+        if updated:
+            # Notify Home Assistant that data has updated
+            self.async_update_listeners()
 
     async def _async_update_data(self) -> Dict[str, Any]:
         """Fetch latest student and bus data dynamically."""
@@ -167,23 +333,25 @@ class MyRideDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             _LOGGER.info("Switching My Ride K-12 poll frequency to %s", new_interval)
             self.update_interval = new_interval
 
-        # 4. Fetch bus locations
-        # Poll buses every active interval (30s) when run is active,
-        # or fall back to passive interval (15 mins) when idle.
+        # 4. Try fetching REST API bus coordinates as a fallback/sync method,
+        # but don't fail if the REST endpoint returns 500.
         buses = []
         if has_active_run or (now - self.last_bus_fetch > timedelta(seconds=DEFAULT_POLL_INTERVAL_PASSIVE)):
             try:
                 buses = await self.api.async_get_buses()
                 self.last_bus_fetch = now
+                for bus in buses:
+                    uid = get_field(bus, "assetUniqueId")
+                    if uid:
+                        self.buses[uid] = bus
             except MyRideAPIError as err:
-                _LOGGER.warning("Could not fetch active bus locations: %s", err)
-                # Keep previous data if fetch fails during transient network issues
-                buses = get_field(self.data, "buses", []) if self.data else []
+                _LOGGER.debug("Could not fetch active bus locations via REST API (this is normal if district uses WebSocket only): %s", err)
+                buses = list(self.buses.values())
         else:
-            buses = get_field(self.data, "buses", []) if self.data else []
+            buses = list(self.buses.values())
 
         return {
             "students": students,
-            "buses": buses,
+            "buses": list(self.buses.values()),
             "has_active_run": has_active_run,
         }
