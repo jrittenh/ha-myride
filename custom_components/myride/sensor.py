@@ -1,5 +1,6 @@
 """Sensor platform for My Ride K-12 integration."""
 import logging
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from homeassistant.components.sensor import SensorEntity
@@ -7,6 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+import homeassistant.util.dt as dt_util
 
 from .const import DOMAIN, get_field
 from .__init__ import MyRideDataUpdateCoordinator
@@ -85,6 +87,41 @@ class MyRideBaseSensor(CoordinatorEntity[MyRideDataUpdateCoordinator], SensorEnt
         run_info = get_field(student, "runInfo", [])
         return next((r for r in run_info if get_field(r, "runId") == self.run_id), None)
 
+    def _get_upcoming_stops(self, run: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Filter stops to only include those in the future (with 2-minute grace period)."""
+        stops = get_field(run, "stopsInfo", [])
+        if not stops:
+            return []
+            
+        now = dt_util.now()
+        upcoming = []
+        for stop in stops:
+            time_str = get_field(stop, "plannedStopTime") or get_field(stop, "stopTime")
+            if not time_str:
+                upcoming.append(stop)
+                continue
+            try:
+                parsed_dt = dt_util.parse_datetime(time_str)
+                if parsed_dt:
+                    # Construct timezone-aware stop datetime for today
+                    stop_dt = datetime(
+                        year=now.year,
+                        month=now.month,
+                        day=now.day,
+                        hour=parsed_dt.hour,
+                        minute=parsed_dt.minute,
+                        second=parsed_dt.second,
+                        microsecond=parsed_dt.microsecond,
+                        tzinfo=now.tzinfo
+                    )
+                    # If the stop time is in the future or very recently in the past, keep it
+                    if stop_dt >= now - timedelta(minutes=2):
+                        upcoming.append(stop)
+            except Exception:
+                upcoming.append(stop)
+                
+        return upcoming if upcoming else stops
+
 
 class MyRideNextStopSensor(MyRideBaseSensor):
     """Sensor reporting the next stop name and ETA for a student route."""
@@ -109,11 +146,10 @@ class MyRideNextStopSensor(MyRideBaseSensor):
         if not run:
             return None
             
-        stops = get_field(run, "stopsInfo", [])
+        stops = self._get_upcoming_stops(run)
         if not stops:
             return "No Stops"
 
-        # Find the next incomplete stop, or default to first
         first_stop = stops[0]
         return get_field(first_stop, "locationName") or get_field(first_stop, "stopDescription") or get_field(first_stop, "stopAddressFull")
 
@@ -125,7 +161,7 @@ class MyRideNextStopSensor(MyRideBaseSensor):
         if not run:
             return attrs
 
-        stops = get_field(run, "stopsInfo", [])
+        stops = self._get_upcoming_stops(run)
         if stops:
             first_stop = stops[0]
             attrs["planned_time"] = get_field(first_stop, "plannedStopTime") or get_field(first_stop, "stopTime")
