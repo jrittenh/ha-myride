@@ -1,7 +1,9 @@
 """Sensor platform for My Ride K-12 integration."""
+from __future__ import annotations
+
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
