@@ -1,15 +1,22 @@
 import pytest
 from unittest.mock import MagicMock
-from custom_components.myride.sensor import MyRideNextStopSensor, MyRideBusStatusSensor
+from custom_components.myride.sensor import (
+    MyRideNextStopSensor,
+    MyRideBusStatusSensor,
+    MyRideDistanceSensor,
+)
 
-def create_mock_coordinator(student_data):
+def create_mock_coordinator(student_data, bus_data=None, completed_stops=None):
     coordinator = MagicMock()
     coordinator.hass = MagicMock()
     coordinator.data = {
         "students": student_data,
-        "buses": [],
+        "buses": bus_data or [],
         "has_active_run": False
     }
+    completed_map = completed_stops or {}
+    coordinator.get_completed_stops = MagicMock(side_effect=lambda run_id: completed_map.get(run_id, set()))
+    coordinator.get_stop_distance_trend = MagicMock(return_value=True)
     return coordinator
 
 @pytest.mark.asyncio
@@ -53,14 +60,117 @@ async def test_sensors_state_mapping():
     assert next_stop_sensor.state == "Corner of 5th and Main"
     assert next_stop_sensor.extra_state_attributes["planned_time"] == "2026-08-24T10:00:00Z"
     assert next_stop_sensor.extra_state_attributes["eta_minutes"] == 5
+    assert next_stop_sensor.extra_state_attributes["tyler_eta_minutes"] == 5
     assert next_stop_sensor.extra_state_attributes["bus_number"] == "Bus 42"
     assert next_stop_sensor.extra_state_attributes["route_name"] == "Route 10 AM"
 
     # 2. Test Bus Status Sensor
-    # EtaStatus mapping in .NET decompiled:
-    # 0 = NoStatus, 1 = NotActive, 2 = OnTime, 3 = Early, 4 = Late, 5 = Completed, 6 = VehiclePastStop, 7 = NoVehicleLocation
     bus_status_sensor = MyRideBusStatusSensor(coordinator, student_id=111, student_name="Jane Doe", run_id=999)
     assert bus_status_sensor.name == "Jane Doe Bus Status (Route 10 AM)"
     assert bus_status_sensor.state == "On Time" # Mapped from 2 (OnTime)
     assert bus_status_sensor.extra_state_attributes["driver_name"] == "John Driver"
     assert bus_status_sensor.extra_state_attributes["bus_number"] == "Bus 42"
+
+@pytest.mark.asyncio
+async def test_distance_sensor_and_telemetry_attributes():
+    """Test MyRideDistanceSensor and NextStopSensor calculate distance and proximity attributes."""
+    student_data = [
+        {
+            "StudentId": 111,
+            "FirstName": "Jane",
+            "LastName": "Doe",
+            "RunInfo": [
+                {
+                    "RunId": 999,
+                    "RunName": "Route 10 AM",
+                    "AssetUniqueId": "VEHICLE42",
+                    "ActiveVehicle": "VEHICLE42",
+                    "StopsInfo": [
+                        {
+                            "StopId": 888,
+                            "StopDescription": "Corner of 5th and Main",
+                            "StopLat": 34.0522,
+                            "StopLong": -118.2437,
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+    # Bus coordinates located ~93 meters away
+    bus_data = [
+        {
+            "AssetUniqueId": "VEHICLE42",
+            "Latitude": 34.0530,
+            "Longitude": -118.2440,
+            "Speed": 15,
+            "Heading": 90,
+        }
+    ]
+
+    coordinator = create_mock_coordinator(student_data, bus_data)
+
+    dist_sensor = MyRideDistanceSensor(coordinator, student_id=111, student_name="Jane Doe", run_id=999)
+    assert dist_sensor.name == "Jane Doe Bus Distance to Next Stop (Route 10 AM)"
+    assert dist_sensor.unit_of_measurement == "mi"
+    assert dist_sensor.state is not None
+    assert dist_sensor.state < 0.1  # ~93m is ~0.06 miles
+    assert dist_sensor.extra_state_attributes["distance_meters"] > 80
+    assert dist_sensor.extra_state_attributes["distance_feet"] > 250
+    assert dist_sensor.extra_state_attributes["is_approaching"] is True
+
+    next_stop_sensor = MyRideNextStopSensor(coordinator, student_id=111, student_name="Jane Doe", run_id=999)
+    attrs = next_stop_sensor.extra_state_attributes
+    assert attrs["distance_to_stop_meters"] > 80
+    assert attrs["is_approaching"] is True
+    assert attrs["bus_speed"] == 15
+    assert attrs["bus_heading"] == 90
+
+@pytest.mark.asyncio
+async def test_proximity_stop_advancement():
+    """Test that stops advance when marked completed, and status transitions to Completed when all done."""
+    student_data = [
+        {
+            "StudentId": 111,
+            "FirstName": "Jane",
+            "LastName": "Doe",
+            "RunInfo": [
+                {
+                    "RunId": 999,
+                    "RunName": "Route 10 AM",
+                    "AssetUniqueId": "VEHICLE42",
+                    "ActiveVehicle": "VEHICLE42",
+                    "StopsInfo": [
+                        {
+                            "StopId": 101,
+                            "StopDescription": "Stop 1",
+                            "StopLat": 34.0522,
+                            "StopLong": -118.2437,
+                        },
+                        {
+                            "StopId": 102,
+                            "StopDescription": "Stop 2",
+                            "StopLat": 34.0600,
+                            "StopLong": -118.2500,
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+
+    # Case 1: Stop 1 completed -> advances to Stop 2
+    coordinator = create_mock_coordinator(student_data, completed_stops={999: {101}})
+    sensor = MyRideNextStopSensor(coordinator, student_id=111, student_name="Jane Doe", run_id=999)
+    assert sensor.state == "Stop 2"
+    assert sensor.extra_state_attributes["stops_completed_prior"] == 1
+    assert sensor.extra_state_attributes["stops_remaining"] == 1
+
+    # Case 2: Both stops completed -> reports "Completed"
+    coordinator_all_done = create_mock_coordinator(student_data, completed_stops={999: {101, 102}})
+    sensor_done = MyRideNextStopSensor(coordinator_all_done, student_id=111, student_name="Jane Doe", run_id=999)
+    assert sensor_done.state == "Completed"
+
+    status_sensor = MyRideBusStatusSensor(coordinator_all_done, student_id=111, student_name="Jane Doe", run_id=999)
+    assert status_sensor.state == "Completed"
+
