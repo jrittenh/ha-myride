@@ -18,9 +18,15 @@ from .const import (
     CONF_DISTRICT_ID,
     DEFAULT_POLL_INTERVAL_ACTIVE,
     DEFAULT_POLL_INTERVAL_PASSIVE,
+    STOP_ARRIVAL_RADIUS_METERS,
+    EVENT_MYRIDE_TELEMETRY,
+    haversine_distance,
+    meters_to_miles,
+    meters_to_feet,
     get_field,
 )
 from .api import MyRideAPI, MyRideAuthError, MyRideAPIError
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -82,10 +88,28 @@ class MyRideDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         self.password = password
         self.last_bus_fetch: datetime = dt_util.now() - timedelta(days=1)
         self.buses: Dict[str, Dict[str, Any]] = {}
+        self.completed_stops: Dict[int, set] = {}
+        self.live_etas: Dict[str, Dict[str, Any]] = {}
+        self._last_stop_distance: Dict[str, float] = {}
+        self._last_date: Optional[str] = None
         self.signalr_connected = False
         self._signalr_task: Optional[asyncio.Task] = None
 
+    def get_completed_stops(self, run_id: int) -> set:
+        """Get the set of completed stop IDs for a run."""
+        return self.completed_stops.get(run_id, set())
+
+    def get_stop_distance_trend(self, run_id: int, stop_id: int, current_distance: float) -> Optional[bool]:
+        """Check if bus is approaching stop (True) or departing (False)."""
+        key = f"{run_id}_{stop_id}"
+        prev = self._last_stop_distance.get(key)
+        self._last_stop_distance[key] = current_distance
+        if prev is None:
+            return None
+        return current_distance < prev
+
     def start_signalr(self) -> None:
+
         """Start the SignalR background task."""
         self._signalr_task = self.hass.async_create_background_task(
             self._async_run_signalr(),
@@ -115,13 +139,23 @@ class MyRideDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
                 headers = self.api._get_headers()
                 
                 async with session.post(negotiate_url, headers=headers) as resp:
-                    if resp.status != 200:
+                    if resp.status == 401:
+                        _LOGGER.info("Cognito token expired during SignalR negotiation, attempting re-login")
+                        await self.api.async_login(self.username, self.password)
+                        headers = self.api._get_headers()
+                        async with session.post(negotiate_url, headers=headers) as retry_resp:
+                            if retry_resp.status != 200:
+                                raise MyRideAPIError(f"SignalR negotiation retry failed with status {retry_resp.status}")
+                            neg_data = await retry_resp.json(content_type=None)
+                    elif resp.status != 200:
                         raise MyRideAPIError(f"SignalR negotiation failed with status {resp.status}")
-                    neg_data = await resp.json(content_type=None)
+                    else:
+                        neg_data = await resp.json(content_type=None)
                     
                 connection_token = neg_data.get("connectionToken") or neg_data.get("connectionId")
                 if not connection_token:
                     raise MyRideAPIError("Failed to obtain connection token during negotiation")
+
                 
                 # 2. Establish WebSocket connection
                 ws_url = f"wss://myridek12.tylerapi.com/livevehiclehub?x-tenant-id={self.api.district_id}&id={connection_token}"
@@ -189,8 +223,74 @@ class MyRideDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             
         _LOGGER.debug("Received live bus location for %s", asset_unique_id)
         self.buses[asset_unique_id] = bus_status
-        self.data["buses"] = list(self.buses.values())
-        
+        if self.data is not None:
+            self.data["buses"] = list(self.buses.values())
+
+        # Date rollover check: reset completed stops if day changed
+        now = dt_util.now()
+        today_str = now.date().isoformat()
+        if self._last_date != today_str:
+            self.completed_stops.clear()
+            self._last_stop_distance.clear()
+            self._last_date = today_str
+
+        # Proximity stop progression:
+        # Check active runs for this vehicle and detect stop arrival
+        bus_lat = get_field(bus_status, "latitude")
+        bus_lon = get_field(bus_status, "longitude")
+        if bus_lat is not None and bus_lon is not None and self.data:
+            students = self.data.get("students", [])
+            for student in students:
+                run_info = get_field(student, "runInfo", [])
+                for run in run_info:
+                    active_veh = get_field(run, "activeVehicle") or get_field(run, "assetUniqueId")
+                    if active_veh != asset_unique_id:
+                        continue
+                    run_id = get_field(run, "runId")
+                    if run_id is None:
+                        continue
+                    if run_id not in self.completed_stops:
+                        self.completed_stops[run_id] = set()
+
+                    stops = get_field(run, "stopsInfo", [])
+                    for stop in stops:
+                        stop_id = get_field(stop, "stopId")
+                        if stop_id is None or stop_id in self.completed_stops[run_id]:
+                            continue
+                        stop_lat = get_field(stop, "stopLat")
+                        stop_lon = get_field(stop, "stopLong")
+                        if stop_lat is None or stop_lon is None:
+                            continue
+
+                        dist = haversine_distance(bus_lat, bus_lon, stop_lat, stop_lon)
+                        self._last_stop_distance[f"{run_id}_{stop_id}"] = dist
+
+                        if dist <= STOP_ARRIVAL_RADIUS_METERS:
+                            _LOGGER.info(
+                                "Bus %s arrived within %.1fm of stop %s (run %s)",
+                                asset_unique_id, dist, stop_id, run_id
+                            )
+                            self.completed_stops[run_id].add(stop_id)
+                            break
+
+        # Fire HA telemetry event if event bus is available
+        try:
+            if hasattr(self.hass, "bus") and hasattr(self.hass.bus, "async_fire"):
+                self.hass.bus.async_fire(
+                    EVENT_MYRIDE_TELEMETRY,
+                    {
+                        "vehicle_id": asset_unique_id,
+                        "latitude": bus_lat,
+                        "longitude": bus_lon,
+                        "speed": get_field(bus_status, "speed"),
+                        "heading": get_field(bus_status, "heading"),
+                        "visible_run_name": get_field(bus_status, "visibleRunName"),
+                        "log_time": get_field(bus_status, "logTime"),
+                    }
+                )
+        except Exception as err:
+            _LOGGER.debug("Could not fire telemetry event: %s", err)
+
         # Notify Home Assistant that data has updated
         self.async_update_listeners()
 
@@ -222,9 +322,17 @@ class MyRideDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             _LOGGER.error("Failed to parse live ETA time: %s", err)
             return
 
+        # Store in persistent self.live_etas map so REST polls don't erase it
+        eta_key = f"{run_id}_{stop_id}"
+        self.live_etas[eta_key] = {
+            "eta": eta_str,
+            "eta_minutes": eta_minutes,
+            "planned_time": planned_str,
+        }
+
         # Update matching stop in memory
         updated = False
-        students = self.data.get("students", [])
+        students = self.data.get("students", []) if self.data else []
         for student in students:
             run_info = get_field(student, "runInfo", [])
             for run in run_info:
@@ -235,6 +343,8 @@ class MyRideDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
                             # Update stopTime to the new ETA timestamp
                             stop["stopTime"] = eta_str
                             stop["etaMinutes"] = eta_minutes
+                            stop["tylerEta"] = eta_str
+                            stop["tylerEtaMinutes"] = eta_minutes
                             updated = True
                             
         if updated:
@@ -242,6 +352,7 @@ class MyRideDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             self.async_update_listeners()
 
     async def _async_update_data(self) -> Dict[str, Any]:
+
         """Fetch latest student and bus data dynamically."""
         now = dt_util.now()
         
@@ -257,6 +368,23 @@ class MyRideDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
                 
         except (MyRideAuthError, MyRideAPIError) as err:
             raise UpdateFailed(f"Failed to communicate with My Ride K-12 API: {err}") from err
+
+        # Re-apply any live ETAs from SignalR that are currently stored
+        for student in students:
+            run_info = get_field(student, "runInfo", [])
+            for run in run_info:
+                r_id = get_field(run, "runId")
+                stops = get_field(run, "stopsInfo", [])
+                for stop in stops:
+                    s_id = get_field(stop, "stopId")
+                    eta_key = f"{r_id}_{s_id}"
+                    if eta_key in self.live_etas:
+                        live_info = self.live_etas[eta_key]
+                        stop["stopTime"] = live_info["eta"]
+                        stop["etaMinutes"] = live_info["eta_minutes"]
+                        stop["tylerEta"] = live_info["eta"]
+                        stop["tylerEtaMinutes"] = live_info["eta_minutes"]
+
 
         # 2. Check for active routes
         has_active_run = False

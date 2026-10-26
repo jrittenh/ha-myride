@@ -50,6 +50,9 @@ async def test_device_tracker_states():
     assert tracker.latitude == 34.0530
     assert tracker.longitude == -118.2440
     assert tracker.source_type == "gps"
+    assert tracker.gps_accuracy == 15
+    assert tracker.extra_state_attributes["gps_accuracy"] == 15
     assert tracker.extra_state_attributes["speed"] == 25
     assert tracker.extra_state_attributes["heading"] == 180
     assert tracker.extra_state_attributes["last_log_time"] == "2026-08-24T07:32:00Z"
+

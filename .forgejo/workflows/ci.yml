@@ -10,7 +10,8 @@ jobs:
   test:
     runs-on: catthehacker-ubuntu-latest
     steps:
-      - uses: https://github.com/actions/checkout@v4
+      - name: Checkout Code
+        uses: https://github.com/actions/checkout@v4
 
       - name: Install uv
         uses: https://github.com/astral-sh/setup-uv@v3

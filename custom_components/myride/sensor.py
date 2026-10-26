@@ -12,7 +12,13 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 import homeassistant.util.dt as dt_util
 
-from .const import DOMAIN, get_field
+from .const import (
+    DOMAIN,
+    get_field,
+    haversine_distance,
+    meters_to_miles,
+    meters_to_feet,
+)
 from .__init__ import MyRideDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,8 +62,10 @@ async def async_setup_entry(
 
             entities.append(MyRideNextStopSensor(coordinator, student_id, student_name, run_id))
             entities.append(MyRideBusStatusSensor(coordinator, student_id, student_name, run_id))
+            entities.append(MyRideDistanceSensor(coordinator, student_id, student_name, run_id))
 
     async_add_entities(entities)
+
 
 
 class MyRideBaseSensor(CoordinatorEntity[MyRideDataUpdateCoordinator], SensorEntity):
@@ -89,15 +97,40 @@ class MyRideBaseSensor(CoordinatorEntity[MyRideDataUpdateCoordinator], SensorEnt
         run_info = get_field(student, "runInfo", [])
         return next((r for r in run_info if get_field(r, "runId") == self.run_id), None)
 
+    def _get_bus_data(self) -> Optional[Dict[str, Any]]:
+        """Retrieve bus location data from coordinator data."""
+        run = self._get_run()
+        if not run:
+            return None
+        vehicle_id = get_field(run, "activeVehicle") or get_field(run, "assetUniqueId")
+        if not vehicle_id:
+            return None
+        buses = get_field(self.coordinator.data, "buses", [])
+        return next((b for b in buses if get_field(b, "assetUniqueId") == vehicle_id), None)
+
     def _get_upcoming_stops(self, run: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Filter stops to only include those in the future (with 2-minute grace period)."""
+        """Filter stops to only include upcoming stops based on proximity completion and schedule."""
         stops = get_field(run, "stopsInfo", [])
         if not stops:
             return []
-            
+
+        completed = self.coordinator.get_completed_stops(self.run_id)
+        # Filter out stops marked completed by proximity arrival
+        uncompleted = [s for s in stops if get_field(s, "stopId") not in completed]
+        if not uncompleted and completed:
+            # All stops in this run were reached/completed
+            return []
+
+        # If bus has live GPS and is active, return remaining uncompleted stops in sequence order
+        bus = self._get_bus_data()
+        if bus and get_field(bus, "latitude") is not None:
+            return uncompleted
+
+        # Fallback when bus is not active or hasn't started:
+        # filter out stops that are far in the past (> 45 mins past planned time)
         now = dt_util.now()
         upcoming = []
-        for stop in stops:
+        for stop in uncompleted:
             time_str = get_field(stop, "plannedStopTime") or get_field(stop, "stopTime")
             if not time_str:
                 upcoming.append(stop)
@@ -105,7 +138,6 @@ class MyRideBaseSensor(CoordinatorEntity[MyRideDataUpdateCoordinator], SensorEnt
             try:
                 parsed_dt = dt_util.parse_datetime(time_str)
                 if parsed_dt:
-                    # Construct timezone-aware stop datetime for today
                     stop_dt = datetime(
                         year=now.year,
                         month=now.month,
@@ -116,13 +148,12 @@ class MyRideBaseSensor(CoordinatorEntity[MyRideDataUpdateCoordinator], SensorEnt
                         microsecond=parsed_dt.microsecond,
                         tzinfo=now.tzinfo
                     )
-                    # If the stop time is in the future or very recently in the past, keep it
-                    if stop_dt >= now - timedelta(minutes=2):
+                    if stop_dt >= now - timedelta(minutes=45):
                         upcoming.append(stop)
             except Exception:
                 upcoming.append(stop)
-                
-        return upcoming if upcoming else stops
+
+        return upcoming if upcoming else uncompleted
 
 
 class MyRideNextStopSensor(MyRideBaseSensor):
@@ -143,13 +174,16 @@ class MyRideNextStopSensor(MyRideBaseSensor):
 
     @property
     def state(self) -> Optional[str]:
-        """Return the next stop name."""
+        """Return the next stop name or completion status."""
         run = self._get_run()
         if not run:
             return None
             
         stops = self._get_upcoming_stops(run)
         if not stops:
+            completed = self.coordinator.get_completed_stops(self.run_id)
+            if completed:
+                return "Completed"
             return "No Stops"
 
         first_stop = stops[0]
@@ -157,22 +191,54 @@ class MyRideNextStopSensor(MyRideBaseSensor):
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
-        """Return metadata for the next stop."""
+        """Return metadata and telemetry for the next stop."""
         run = self._get_run()
         attrs = {}
         if not run:
             return attrs
 
         stops = self._get_upcoming_stops(run)
+        bus = self._get_bus_data()
+        completed = self.coordinator.get_completed_stops(self.run_id)
+
+        attrs["stops_completed_prior"] = len(completed)
+        attrs["stops_remaining"] = len(stops)
+
         if stops:
             first_stop = stops[0]
+            stop_id = get_field(first_stop, "stopId")
             attrs["planned_time"] = get_field(first_stop, "plannedStopTime") or get_field(first_stop, "stopTime")
-            attrs["eta_minutes"] = get_field(first_stop, "etaMinutes", 0)
+            attrs["tyler_eta"] = get_field(first_stop, "tylerEta") or get_field(first_stop, "stopTime")
+            eta_mins = get_field(first_stop, "tylerEtaMinutes") or get_field(first_stop, "etaMinutes", 0)
+            attrs["eta_minutes"] = eta_mins
+            attrs["tyler_eta_minutes"] = eta_mins
             attrs["stop_address"] = get_field(first_stop, "stopAddressFull")
-            attrs["stop_id"] = get_field(first_stop, "stopId")
-            
+
+            attrs["stop_id"] = stop_id
+            attrs["stop_lat"] = get_field(first_stop, "stopLat")
+            attrs["stop_lon"] = get_field(first_stop, "stopLong")
+
+            # Calculate live distance if bus coordinates and stop coordinates are available
+            if bus:
+                bus_lat = get_field(bus, "latitude")
+                bus_lon = get_field(bus, "longitude")
+                stop_lat = get_field(first_stop, "stopLat")
+                stop_lon = get_field(first_stop, "stopLong")
+                if bus_lat is not None and bus_lon is not None and stop_lat is not None and stop_lon is not None:
+                    dist_m = haversine_distance(bus_lat, bus_lon, stop_lat, stop_lon)
+                    attrs["distance_to_stop_meters"] = round(dist_m, 1)
+                    attrs["distance_to_stop_miles"] = round(meters_to_miles(dist_m), 2)
+                    attrs["distance_to_stop_feet"] = int(meters_to_feet(dist_m))
+                    if stop_id is not None:
+                        attrs["is_approaching"] = self.coordinator.get_stop_distance_trend(
+                            self.run_id, stop_id, dist_m
+                        )
+                    attrs["bus_speed"] = get_field(bus, "speed")
+                    attrs["bus_heading"] = get_field(bus, "heading")
+
         attrs["bus_number"] = get_field(run, "busNumber")
         attrs["route_name"] = get_field(run, "runName") or get_field(run, "runDescription")
+        attrs["active_vehicle"] = get_field(run, "activeVehicle") or get_field(run, "assetUniqueId")
         
         return attrs
 
@@ -199,6 +265,10 @@ class MyRideBusStatusSensor(MyRideBaseSensor):
         run = self._get_run()
         if not run:
             return "Unknown"
+        stops = self._get_upcoming_stops(run)
+        completed = self.coordinator.get_completed_stops(self.run_id)
+        if not stops and completed:
+            return "Completed"
         status_code = get_field(run, "vehicleStatus", 0)
         return STATUS_MAPPING.get(status_code, "Unknown")
 
@@ -214,3 +284,84 @@ class MyRideBusStatusSensor(MyRideBaseSensor):
         attrs["driver_name"] = get_field(run, "driverName") or get_field(run, "rolloutDriverName")
         
         return attrs
+
+
+class MyRideDistanceSensor(MyRideBaseSensor):
+    """Sensor reporting the distance from the bus to the next stop in miles."""
+
+    @property
+    def name(self) -> str:
+        """Return the name of the sensor."""
+        run = self._get_run()
+        run_name = get_field(run, "runName") if run else None
+        suffix = f" ({run_name})" if run_name else ""
+        return f"{self.student_name} Bus Distance to Next Stop{suffix}"
+
+    @property
+    def unique_id(self) -> str:
+        """Return a unique ID for this sensor."""
+        return f"myride_{self.student_id}_{self.run_id}_distance"
+
+    @property
+    def native_unit_of_measurement(self) -> str:
+        """Return the unit of measurement."""
+        return "mi"
+
+    @property
+    def unit_of_measurement(self) -> str:
+        """Return the unit of measurement."""
+        return "mi"
+
+    @property
+    def state(self) -> Optional[float]:
+        """Return the distance to the next stop in miles."""
+        bus = self._get_bus_data()
+        run = self._get_run()
+        if not bus or not run:
+            return None
+
+        stops = self._get_upcoming_stops(run)
+        if not stops:
+            return None
+
+        first_stop = stops[0]
+        bus_lat = get_field(bus, "latitude")
+        bus_lon = get_field(bus, "longitude")
+        stop_lat = get_field(first_stop, "stopLat")
+        stop_lon = get_field(first_stop, "stopLong")
+        if bus_lat is None or bus_lon is None or stop_lat is None or stop_lon is None:
+            return None
+
+        dist_m = haversine_distance(bus_lat, bus_lon, stop_lat, stop_lon)
+        return round(meters_to_miles(dist_m), 2)
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return extra attributes for distance."""
+        attrs = {}
+        bus = self._get_bus_data()
+        run = self._get_run()
+        if not bus or not run:
+            return attrs
+
+        stops = self._get_upcoming_stops(run)
+        if not stops:
+            return attrs
+
+        first_stop = stops[0]
+        stop_id = get_field(first_stop, "stopId")
+        bus_lat = get_field(bus, "latitude")
+        bus_lon = get_field(bus, "longitude")
+        stop_lat = get_field(first_stop, "stopLat")
+        stop_lon = get_field(first_stop, "stopLong")
+        if bus_lat is not None and bus_lon is not None and stop_lat is not None and stop_lon is not None:
+            dist_m = haversine_distance(bus_lat, bus_lon, stop_lat, stop_lon)
+            attrs["distance_meters"] = round(dist_m, 1)
+            attrs["distance_feet"] = int(meters_to_feet(dist_m))
+            if stop_id is not None:
+                attrs["is_approaching"] = self.coordinator.get_stop_distance_trend(
+                    self.run_id, stop_id, dist_m
+                )
+        attrs["next_stop"] = get_field(first_stop, "locationName") or get_field(first_stop, "stopDescription")
+        return attrs
+

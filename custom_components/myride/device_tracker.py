@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, get_field
+from .const import DOMAIN, get_field, DEFAULT_GPS_ACCURACY
 from .__init__ import MyRideDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -89,6 +89,14 @@ class MyRideBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], TrackerEn
         return "gps"
 
     @property
+    def gps_accuracy(self) -> int:
+        """Return the GPS accuracy in meters."""
+        bus = self._get_bus_data()
+        if bus:
+            return get_field(bus, "gpsAccuracy") or DEFAULT_GPS_ACCURACY
+        return DEFAULT_GPS_ACCURACY
+
+    @property
     def extra_state_attributes(self) -> Dict[str, Any]:
         """Return telemetry attributes of the bus."""
         bus = self._get_bus_data()
@@ -100,5 +108,7 @@ class MyRideBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], TrackerEn
         attrs["heading"] = get_field(bus, "heading")
         attrs["last_log_time"] = get_field(bus, "logTime")
         attrs["visible_run_name"] = get_field(bus, "visibleRunName")
+        attrs["gps_accuracy"] = self.gps_accuracy
         
         return attrs
+
