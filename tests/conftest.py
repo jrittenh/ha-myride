@@ -55,6 +55,10 @@ class MockDataUpdateCoordinator:
     async def async_config_entry_first_refresh(self):
         self.data = await self._async_update_data()
 
+    def async_update_listeners(self):
+        pass
+
+
 # Define mock entities for subclassing (keeping them separate to avoid MRO conflicts)
 class MockCoordinatorEntity:
     def __init__(self, coordinator, context=None):
