@@ -8,11 +8,12 @@ from typing import Any, Dict, Optional
 from homeassistant.components.device_tracker.config_entry import TrackerEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 import homeassistant.util.dt as dt_util
 
-from .const import DOMAIN, get_field, DEFAULT_GPS_ACCURACY
+from .const import DOMAIN, get_field, DEFAULT_GPS_ACCURACY, get_run_display_name
 from .__init__ import MyRideDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,10 +25,25 @@ async def async_setup_entry(
 ) -> None:
     """Set up My Ride K-12 bus trackers from config entry."""
     coordinator: MyRideDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities = []
 
+    # Clean up obsolete physical bus trackers from Home Assistant's entity registry
+    try:
+        registry = er.async_get(hass)
+        entries = er.async_entries_for_config_entry(registry, entry.entry_id)
+        for reg_entry in entries:
+            # Purge any legacy device tracker whose unique_id is not a student bus tracker
+            if reg_entry.domain == "device_tracker" and not reg_entry.unique_id.endswith("_bus_tracker"):
+                _LOGGER.info(
+                    "Cleaning up obsolete device tracker from registry: %s (unique_id: %s)",
+                    reg_entry.entity_id,
+                    reg_entry.unique_id,
+                )
+                registry.async_remove(reg_entry.entity_id)
+    except Exception as err:
+        _LOGGER.debug("Could not clean up entity registry: %s", err)
+
+    entities = []
     students = get_field(coordinator.data, "students", [])
-    tracked_vehicles = set()
 
     for student in students:
         student_id = get_field(student, "studentId")
@@ -47,12 +63,6 @@ async def async_setup_entry(
             entities.append(
                 MyRideStudentBusTracker(coordinator, student_id, student_name, run_id)
             )
-
-            # Also register physical vehicle tracker if vehicle ID is known
-            vehicle_id = get_field(run, "activeVehicle") or get_field(run, "assetUniqueId")
-            if vehicle_id and vehicle_id not in tracked_vehicles:
-                entities.append(MyRideBusTracker(coordinator, vehicle_id))
-                tracked_vehicles.add(vehicle_id)
 
     async_add_entities(entities)
 
@@ -114,8 +124,8 @@ class MyRideStudentBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], Tr
     def name(self) -> str:
         """Return the name of the tracker."""
         run = self._get_run()
-        run_name = get_field(run, "runName") if run else None
-        suffix = f" ({run_name})" if run_name else ""
+        display_name = get_run_display_name(run) if run else ""
+        suffix = f" ({display_name})" if display_name else ""
         return f"{self.student_name} Bus{suffix}"
 
     @property
@@ -168,7 +178,7 @@ class MyRideStudentBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], Tr
         attrs["assigned_vehicle_id"] = vehicle_id
         if run:
             attrs["bus_number"] = get_field(run, "busNumber")
-            attrs["route_name"] = get_field(run, "runName") or get_field(run, "runDescription")
+            attrs["route_name"] = get_run_display_name(run) or get_field(run, "runName") or get_field(run, "runDescription")
             attrs["driver_name"] = get_field(run, "driverName") or get_field(run, "rolloutDriverName")
 
         if not bus:
@@ -192,7 +202,7 @@ class MyRideStudentBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], Tr
 
 
 class MyRideBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], TrackerEntity):
-    """Device tracker representing a physical school bus."""
+    """Device tracker representing a physical school bus (legacy)."""
 
     def __init__(
         self,
