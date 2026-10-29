@@ -174,6 +174,15 @@ class MyRideNextStopSensor(MyRideBaseSensor):
         return f"myride_{self.student_id}_{self.run_id}_next_stop"
 
     @property
+    def suggested_object_id(self) -> str:
+        """Return the suggested object ID for this entity."""
+        run = self._get_run()
+        display_name = get_run_display_name(run) if run else ""
+        time_suffix = "_am" if "am" in display_name.lower() else ("_pm" if "pm" in display_name.lower() else "")
+        slug = self.student_name.lower().replace(" ", "_")
+        return f"{slug}_next_bus_stop{time_suffix}"
+
+    @property
     def state(self) -> Optional[str]:
         """Return the next stop name or completion status."""
         run = self._get_run()
@@ -261,6 +270,15 @@ class MyRideBusStatusSensor(MyRideBaseSensor):
         return f"myride_{self.student_id}_{self.run_id}_bus_status"
 
     @property
+    def suggested_object_id(self) -> str:
+        """Return the suggested object ID for this entity."""
+        run = self._get_run()
+        display_name = get_run_display_name(run) if run else ""
+        time_suffix = "_am" if "am" in display_name.lower() else ("_pm" if "pm" in display_name.lower() else "")
+        slug = self.student_name.lower().replace(" ", "_")
+        return f"{slug}_bus_status{time_suffix}"
+
+    @property
     def state(self) -> Optional[str]:
         """Return the mapped status."""
         run = self._get_run()
@@ -302,6 +320,15 @@ class MyRideDistanceSensor(MyRideBaseSensor):
     def unique_id(self) -> str:
         """Return a unique ID for this sensor."""
         return f"myride_{self.student_id}_{self.run_id}_distance"
+
+    @property
+    def suggested_object_id(self) -> str:
+        """Return the suggested object ID for this entity."""
+        run = self._get_run()
+        display_name = get_run_display_name(run) if run else ""
+        time_suffix = "_am" if "am" in display_name.lower() else ("_pm" if "pm" in display_name.lower() else "")
+        slug = self.student_name.lower().replace(" ", "_")
+        return f"{slug}_bus_distance_to_next_stop{time_suffix}"
 
     @property
     def native_unit_of_measurement(self) -> str:

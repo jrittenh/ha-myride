@@ -134,6 +134,21 @@ class MyRideStudentBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], Tr
         return f"myride_{self.student_id}_{self.run_id}_bus_tracker"
 
     @property
+    def suggested_object_id(self) -> str:
+        """Return the suggested object ID for this entity."""
+        run = self._get_run()
+        display_name = get_run_display_name(run) if run else ""
+        time_suffix = ""
+        if "am" in display_name.lower():
+            time_suffix = "_am"
+        elif "pm" in display_name.lower():
+            time_suffix = "_pm"
+        elif display_name:
+            time_suffix = f"_{display_name.lower().replace(' ', '_')}"
+        slug = self.student_name.lower().replace(" ", "_")
+        return f"{slug}_bus{time_suffix}"
+
+    @property
     def latitude(self) -> Optional[float]:
         """Return latitude value of the bus."""
         bus = self._get_bus_data()
