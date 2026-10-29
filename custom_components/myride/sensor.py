@@ -15,6 +15,7 @@ import homeassistant.util.dt as dt_util
 from .const import (
     DOMAIN,
     get_field,
+    get_run_display_name,
     haversine_distance,
     meters_to_miles,
     meters_to_feet,
@@ -163,8 +164,8 @@ class MyRideNextStopSensor(MyRideBaseSensor):
     def name(self) -> str:
         """Return the name of the sensor."""
         run = self._get_run()
-        run_name = get_field(run, "runName") if run else None
-        suffix = f" ({run_name})" if run_name else ""
+        display_name = get_run_display_name(run) if run else ""
+        suffix = f" ({display_name})" if display_name else ""
         return f"{self.student_name} Next Bus Stop{suffix}"
 
     @property
@@ -237,7 +238,7 @@ class MyRideNextStopSensor(MyRideBaseSensor):
                     attrs["bus_heading"] = get_field(bus, "heading")
 
         attrs["bus_number"] = get_field(run, "busNumber")
-        attrs["route_name"] = get_field(run, "runName") or get_field(run, "runDescription")
+        attrs["route_name"] = get_run_display_name(run) or get_field(run, "runName") or get_field(run, "runDescription")
         attrs["active_vehicle"] = get_field(run, "activeVehicle") or get_field(run, "assetUniqueId")
         
         return attrs
@@ -250,8 +251,8 @@ class MyRideBusStatusSensor(MyRideBaseSensor):
     def name(self) -> str:
         """Return the name of the sensor."""
         run = self._get_run()
-        run_name = get_field(run, "runName") if run else None
-        suffix = f" ({run_name})" if run_name else ""
+        display_name = get_run_display_name(run) if run else ""
+        suffix = f" ({display_name})" if display_name else ""
         return f"{self.student_name} Bus Status{suffix}"
 
     @property
@@ -293,8 +294,8 @@ class MyRideDistanceSensor(MyRideBaseSensor):
     def name(self) -> str:
         """Return the name of the sensor."""
         run = self._get_run()
-        run_name = get_field(run, "runName") if run else None
-        suffix = f" ({run_name})" if run_name else ""
+        display_name = get_run_display_name(run) if run else ""
+        suffix = f" ({display_name})" if display_name else ""
         return f"{self.student_name} Bus Distance to Next Stop{suffix}"
 
     @property

@@ -110,6 +110,9 @@ ha_sensor.SensorEntity = MockSensorEntity
 ha_tracker = MagicMock()
 ha_tracker.TrackerEntity = MockTrackerEntity
 
+ha_entity_registry = MagicMock()
+ha_helpers.entity_registry = ha_entity_registry
+
 # Register all modules
 sys.modules["homeassistant"] = ha_mock
 sys.modules["homeassistant.config_entries"] = ha_config_entries
@@ -118,6 +121,7 @@ sys.modules["homeassistant.helpers"] = ha_helpers
 sys.modules["homeassistant.helpers.aiohttp_client"] = ha_helpers.aiohttp_client
 sys.modules["homeassistant.helpers.update_coordinator"] = ha_helpers.update_coordinator
 sys.modules["homeassistant.helpers.entity_platform"] = ha_helpers.entity_platform
+sys.modules["homeassistant.helpers.entity_registry"] = ha_entity_registry
 sys.modules["homeassistant.const"] = ha_const
 sys.modules["homeassistant.exceptions"] = MagicMock()
 

@@ -174,3 +174,38 @@ async def test_proximity_stop_advancement():
     status_sensor = MyRideBusStatusSensor(coordinator_all_done, student_id=111, student_name="Jane Doe", run_id=999)
     assert status_sensor.state == "Completed"
 
+@pytest.mark.asyncio
+async def test_sensors_am_pm_fallback_naming():
+    """Test that sensors append (AM) or (PM) when runName is blank."""
+    student_data = [
+        {
+            "StudentId": 111,
+            "FirstName": "Jane",
+            "LastName": "Doe",
+            "RunInfo": [
+                {
+                    "RunId": 101,
+                    "RunName": "",
+                    "StopsInfo": [{"plannedStopTime": "2026-10-28T07:15:00Z"}],
+                },
+                {
+                    "RunId": 102,
+                    "RunName": None,
+                    "StopsInfo": [{"plannedStopTime": "2026-10-28T14:45:00Z"}],
+                }
+            ]
+        }
+    ]
+    coordinator = create_mock_coordinator(student_data)
+    next_stop_am = MyRideNextStopSensor(coordinator, student_id=111, student_name="Jane Doe", run_id=101)
+    status_am = MyRideBusStatusSensor(coordinator, student_id=111, student_name="Jane Doe", run_id=101)
+    dist_am = MyRideDistanceSensor(coordinator, student_id=111, student_name="Jane Doe", run_id=101)
+
+    assert next_stop_am.name == "Jane Doe Next Bus Stop (AM)"
+    assert status_am.name == "Jane Doe Bus Status (AM)"
+    assert dist_am.name == "Jane Doe Bus Distance to Next Stop (AM)"
+
+    next_stop_pm = MyRideNextStopSensor(coordinator, student_id=111, student_name="Jane Doe", run_id=102)
+    assert next_stop_pm.name == "Jane Doe Next Bus Stop (PM)"
+
+
