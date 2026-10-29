@@ -30,14 +30,25 @@ class MockConfigFlow:
 # Define homeassistant.util.dt mock
 class MockDtUtil:
     UTC = timezone.utc
+    _default_tz = None
+
+    def set_default_time_zone(self, tz):
+        self._default_tz = tz
 
     def now(self) -> datetime:
-        return datetime.now(self.UTC)
+        return datetime.now(self._default_tz or self.UTC)
 
     def parse_datetime(self, time_str: str) -> datetime:
         if time_str.endswith("Z"):
             time_str = time_str[:-1] + "+00:00"
         return datetime.fromisoformat(time_str)
+
+    def as_local(self, dt: datetime) -> datetime:
+        if self._default_tz is not None:
+            return dt.astimezone(self._default_tz)
+        if dt.tzinfo is not None:
+            return dt.astimezone()
+        return dt
 
 # Define a real class for DataUpdateCoordinator to avoid subclassing MagicMock
 class MockDataUpdateCoordinator:

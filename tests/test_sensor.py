@@ -209,3 +209,40 @@ async def test_sensors_am_pm_fallback_naming():
     assert next_stop_pm.name == "Jane Doe Next Bus Stop (PM)"
 
 
+@pytest.mark.asyncio
+async def test_sensors_with_embedded_am_route_name():
+    """Test sensor naming and suggested_object_id for route names containing embedded 'am'."""
+    student_data = [
+        {
+            "StudentId": 555,
+            "FirstName": "Pat",
+            "LastName": "Lee",
+            "RunInfo": [
+                {
+                    "RunId": 501,
+                    "RunName": "Campus",
+                    "StopsInfo": [{"plannedStopTime": "2026-10-28T07:30:00Z"}],
+                },
+                {
+                    "RunId": 502,
+                    "RunName": "Campus",
+                    "StopsInfo": [{"plannedStopTime": "2026-10-28T15:00:00Z"}],
+                },
+            ],
+        }
+    ]
+    coordinator = MagicMock()
+    coordinator.data = {"students": student_data, "buses": [], "has_active_run": False}
+    coordinator.get_completed_stops.return_value = set()
+
+    sensor_am = MyRideNextStopSensor(coordinator, student_id=555, student_name="Pat Lee", run_id=501)
+    sensor_pm = MyRideNextStopSensor(coordinator, student_id=555, student_name="Pat Lee", run_id=502)
+
+    assert sensor_am.name == "Pat Lee Next Bus Stop (Campus AM)"
+    assert sensor_am.suggested_object_id == "pat_lee_next_bus_stop_am"
+
+    assert sensor_pm.name == "Pat Lee Next Bus Stop (Campus PM)"
+    assert sensor_pm.suggested_object_id == "pat_lee_next_bus_stop_pm"
+
+
+

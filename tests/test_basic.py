@@ -3,6 +3,7 @@ from custom_components.myride.const import (
     meters_to_miles,
     meters_to_feet,
     get_run_display_name,
+    get_time_suffix,
 )
 
 def test_basic():
@@ -48,3 +49,42 @@ def test_get_run_display_name():
 
     # 5. Fallback to runId if no times
     assert get_run_display_name({"runId": 42}) == "Route 42"
+
+    # 6. Relative run comparison when all_runs is provided
+    run1 = {
+        "runId": 101,
+        "runName": "Campus",
+        "stopsInfo": [{"plannedStopTime": "2026-10-28T08:15:00Z"}],
+    }
+    run2 = {
+        "runId": 102,
+        "runName": "Campus",
+        "stopsInfo": [{"plannedStopTime": "2026-10-28T15:15:00Z"}],
+    }
+    all_runs = [run1, run2]
+    assert get_run_display_name(run1, all_runs) == "Campus AM"
+    assert get_run_display_name(run2, all_runs) == "Campus PM"
+
+
+def test_get_time_suffix():
+    """Test get_time_suffix extracts correct entity suffix without false AM matches."""
+    # Words containing 'am' (e.g. campus, program, oakham) must NOT trigger '_am'
+    assert get_time_suffix("Campus PM") == "_pm"
+    assert get_time_suffix("Campus (PM)") == "_pm"
+    assert get_time_suffix("Elementary Program (PM)") == "_pm"
+    assert get_time_suffix("Oakham PM") == "_pm"
+    assert get_time_suffix("Durham PM") == "_pm"
+    assert get_time_suffix("William PM") == "_pm"
+    assert get_time_suffix("Graham PM") == "_pm"
+    assert get_time_suffix("STEAM PM") == "_pm"
+    assert get_time_suffix("Campus AM") == "_am"
+    assert get_time_suffix("Campus (AM)") == "_am"
+    assert get_time_suffix("Program AM") == "_am"
+    assert get_time_suffix("AM") == "_am"
+    assert get_time_suffix("PM") == "_pm"
+    assert get_time_suffix("Morning") == "_am"
+    assert get_time_suffix("Afternoon") == "_pm"
+    assert get_time_suffix("Pickup") == "_am"
+    assert get_time_suffix("Dropoff") == "_pm"
+    assert get_time_suffix("Route 42") == "_route_42"
+    assert get_time_suffix("") == ""

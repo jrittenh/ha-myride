@@ -25,6 +25,7 @@ from .const import (
     meters_to_feet,
     get_field,
     get_run_display_name,
+    get_time_suffix,
 )
 from .api import MyRideAPI, MyRideAuthError, MyRideAPIError
 
@@ -50,19 +51,14 @@ def _async_migrate_entity_ids(hass: HomeAssistant, entry: ConfigEntry, students:
             student_name = f"{first} {last}".strip()
             slug = student_name.lower().replace(" ", "_")
 
-            for run in get_field(student, "runInfo", []):
+            runs = get_field(student, "runInfo", [])
+            for run in runs:
                 run_id = get_field(run, "runId")
                 if student_id is None or run_id is None:
                     continue
 
-                display_name = get_run_display_name(run)
-                time_suffix = ""
-                if "am" in display_name.lower():
-                    time_suffix = "_am"
-                elif "pm" in display_name.lower():
-                    time_suffix = "_pm"
-                elif display_name:
-                    time_suffix = f"_{display_name.lower().replace(' ', '_')}"
+                display_name = get_run_display_name(run, runs)
+                time_suffix = get_time_suffix(display_name)
 
                 target_map[f"myride_{student_id}_{run_id}_bus_tracker"] = f"device_tracker.{slug}_bus{time_suffix}"
                 target_map[f"myride_{student_id}_{run_id}_next_stop"] = f"sensor.{slug}_next_bus_stop{time_suffix}"
@@ -77,12 +73,20 @@ def _async_migrate_entity_ids(hass: HomeAssistant, entry: ConfigEntry, students:
             if reg_entry.entity_id != target_id:
                 existing = registry.async_get(target_id)
                 if existing is not None and existing.entity_id != reg_entry.entity_id:
-                    _LOGGER.debug(
-                        "Target entity ID %s already in use; skipping migration for %s",
-                        target_id,
-                        reg_entry.entity_id,
-                    )
-                    continue
+                    # If the existing entity is also slated for migration to a different ID, move it temporarily
+                    if existing.unique_id in target_map and target_map[existing.unique_id] != existing.entity_id:
+                        temp_id = f"{existing.entity_id}_migrating"
+                        try:
+                            registry.async_update_entity(existing.entity_id, new_entity_id=temp_id)
+                        except Exception:
+                            pass
+                    else:
+                        _LOGGER.debug(
+                            "Target entity ID %s already in use; skipping migration for %s",
+                            target_id,
+                            reg_entry.entity_id,
+                        )
+                        continue
 
                 _LOGGER.info(
                     "Migrating entity ID from %s to %s",

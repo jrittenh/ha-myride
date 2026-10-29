@@ -16,6 +16,7 @@ from .const import (
     DOMAIN,
     get_field,
     get_run_display_name,
+    get_time_suffix,
     haversine_distance,
     meters_to_miles,
     meters_to_feet,
@@ -98,6 +99,13 @@ class MyRideBaseSensor(CoordinatorEntity[MyRideDataUpdateCoordinator], SensorEnt
         run_info = get_field(student, "runInfo", [])
         return next((r for r in run_info if get_field(r, "runId") == self.run_id), None)
 
+    def _get_all_runs(self) -> List[Dict[str, Any]]:
+        """Retrieve all runs for this student from coordinator data."""
+        student = self._get_student()
+        if not student:
+            return []
+        return get_field(student, "runInfo", []) or []
+
     def _get_bus_data(self) -> Optional[Dict[str, Any]]:
         """Retrieve bus location data from coordinator data."""
         run = self._get_run()
@@ -164,7 +172,8 @@ class MyRideNextStopSensor(MyRideBaseSensor):
     def name(self) -> str:
         """Return the name of the sensor."""
         run = self._get_run()
-        display_name = get_run_display_name(run) if run else ""
+        all_runs = self._get_all_runs()
+        display_name = get_run_display_name(run, all_runs) if run else ""
         suffix = f" ({display_name})" if display_name else ""
         return f"{self.student_name} Next Bus Stop{suffix}"
 
@@ -177,8 +186,9 @@ class MyRideNextStopSensor(MyRideBaseSensor):
     def suggested_object_id(self) -> str:
         """Return the suggested object ID for this entity."""
         run = self._get_run()
-        display_name = get_run_display_name(run) if run else ""
-        time_suffix = "_am" if "am" in display_name.lower() else ("_pm" if "pm" in display_name.lower() else "")
+        all_runs = self._get_all_runs()
+        display_name = get_run_display_name(run, all_runs) if run else ""
+        time_suffix = get_time_suffix(display_name)
         slug = self.student_name.lower().replace(" ", "_")
         return f"{slug}_next_bus_stop{time_suffix}"
 
@@ -247,7 +257,8 @@ class MyRideNextStopSensor(MyRideBaseSensor):
                     attrs["bus_heading"] = get_field(bus, "heading")
 
         attrs["bus_number"] = get_field(run, "busNumber")
-        attrs["route_name"] = get_run_display_name(run) or get_field(run, "runName") or get_field(run, "runDescription")
+        all_runs = self._get_all_runs()
+        attrs["route_name"] = get_run_display_name(run, all_runs) or get_field(run, "runName") or get_field(run, "runDescription")
         attrs["active_vehicle"] = get_field(run, "activeVehicle") or get_field(run, "assetUniqueId")
         
         return attrs
@@ -260,7 +271,8 @@ class MyRideBusStatusSensor(MyRideBaseSensor):
     def name(self) -> str:
         """Return the name of the sensor."""
         run = self._get_run()
-        display_name = get_run_display_name(run) if run else ""
+        all_runs = self._get_all_runs()
+        display_name = get_run_display_name(run, all_runs) if run else ""
         suffix = f" ({display_name})" if display_name else ""
         return f"{self.student_name} Bus Status{suffix}"
 
@@ -273,8 +285,9 @@ class MyRideBusStatusSensor(MyRideBaseSensor):
     def suggested_object_id(self) -> str:
         """Return the suggested object ID for this entity."""
         run = self._get_run()
-        display_name = get_run_display_name(run) if run else ""
-        time_suffix = "_am" if "am" in display_name.lower() else ("_pm" if "pm" in display_name.lower() else "")
+        all_runs = self._get_all_runs()
+        display_name = get_run_display_name(run, all_runs) if run else ""
+        time_suffix = get_time_suffix(display_name)
         slug = self.student_name.lower().replace(" ", "_")
         return f"{slug}_bus_status{time_suffix}"
 
@@ -312,7 +325,8 @@ class MyRideDistanceSensor(MyRideBaseSensor):
     def name(self) -> str:
         """Return the name of the sensor."""
         run = self._get_run()
-        display_name = get_run_display_name(run) if run else ""
+        all_runs = self._get_all_runs()
+        display_name = get_run_display_name(run, all_runs) if run else ""
         suffix = f" ({display_name})" if display_name else ""
         return f"{self.student_name} Bus Distance to Next Stop{suffix}"
 
@@ -325,8 +339,9 @@ class MyRideDistanceSensor(MyRideBaseSensor):
     def suggested_object_id(self) -> str:
         """Return the suggested object ID for this entity."""
         run = self._get_run()
-        display_name = get_run_display_name(run) if run else ""
-        time_suffix = "_am" if "am" in display_name.lower() else ("_pm" if "pm" in display_name.lower() else "")
+        all_runs = self._get_all_runs()
+        display_name = get_run_display_name(run, all_runs) if run else ""
+        time_suffix = get_time_suffix(display_name)
         slug = self.student_name.lower().replace(" ", "_")
         return f"{slug}_bus_distance_to_next_stop{time_suffix}"
 

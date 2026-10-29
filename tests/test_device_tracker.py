@@ -229,3 +229,39 @@ async def test_device_tracker_async_setup_entry_and_registry_cleanup():
     # 2. Verify only 1 student bus tracker was added (no duplicate raw bus trackers)
     assert len(added_entities) == 1
     assert isinstance(added_entities[0], MyRideStudentBusTracker)
+
+
+@pytest.mark.asyncio
+async def test_student_bus_tracker_embedded_am_in_route_name():
+    """Test that a route name like 'Campus PM' or 'Program PM' gets _pm and not _am."""
+    student_data = [
+        {
+            "StudentId": 333,
+            "FirstName": "Sam",
+            "LastName": "Taylor",
+            "RunInfo": [
+                {
+                    "RunId": 301,
+                    "RunName": "Campus",
+                    "StopsInfo": [{"plannedStopTime": "2026-10-28T07:40:00Z"}],
+                    "ActiveVehicle": "BUS1",
+                },
+                {
+                    "RunId": 302,
+                    "RunName": "Campus",
+                    "StopsInfo": [{"plannedStopTime": "2026-10-28T15:10:00Z"}],
+                    "ActiveVehicle": "BUS2",
+                },
+            ],
+        }
+    ]
+    coordinator = create_mock_coordinator(student_data, [])
+    tracker_am = MyRideStudentBusTracker(coordinator, student_id=333, student_name="Sam Taylor", run_id=301)
+    tracker_pm = MyRideStudentBusTracker(coordinator, student_id=333, student_name="Sam Taylor", run_id=302)
+
+    assert tracker_am.name == "Sam Taylor Bus (Campus AM)"
+    assert tracker_am.suggested_object_id == "sam_taylor_bus_am"
+
+    assert tracker_pm.name == "Sam Taylor Bus (Campus PM)"
+    assert tracker_pm.suggested_object_id == "sam_taylor_bus_pm"
+
