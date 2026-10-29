@@ -13,7 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 import homeassistant.util.dt as dt_util
 
-from .const import DOMAIN, get_field, DEFAULT_GPS_ACCURACY, get_run_display_name
+from .const import DOMAIN, get_field, DEFAULT_GPS_ACCURACY, get_run_display_name, get_time_suffix
 from .__init__ import MyRideDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -109,6 +109,14 @@ class MyRideStudentBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], Tr
         run_info = get_field(student, "runInfo", [])
         return next((r for r in run_info if get_field(r, "runId") == self.run_id), None)
 
+    def _get_all_runs(self) -> List[Dict[str, Any]]:
+        """Retrieve all runs for this student from coordinator data."""
+        students = get_field(self.coordinator.data, "students", [])
+        student = next((s for s in students if get_field(s, "studentId") == self.student_id), None)
+        if not student:
+            return []
+        return get_field(student, "runInfo", []) or []
+
     def _get_bus_data(self) -> Optional[Dict[str, Any]]:
         """Retrieve active bus data for this run, dynamically resolving on bus swaps."""
         run = self._get_run()
@@ -124,7 +132,8 @@ class MyRideStudentBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], Tr
     def name(self) -> str:
         """Return the name of the tracker."""
         run = self._get_run()
-        display_name = get_run_display_name(run) if run else ""
+        all_runs = self._get_all_runs()
+        display_name = get_run_display_name(run, all_runs) if run else ""
         suffix = f" ({display_name})" if display_name else ""
         return f"{self.student_name} Bus{suffix}"
 
@@ -137,14 +146,9 @@ class MyRideStudentBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], Tr
     def suggested_object_id(self) -> str:
         """Return the suggested object ID for this entity."""
         run = self._get_run()
-        display_name = get_run_display_name(run) if run else ""
-        time_suffix = ""
-        if "am" in display_name.lower():
-            time_suffix = "_am"
-        elif "pm" in display_name.lower():
-            time_suffix = "_pm"
-        elif display_name:
-            time_suffix = f"_{display_name.lower().replace(' ', '_')}"
+        all_runs = self._get_all_runs()
+        display_name = get_run_display_name(run, all_runs) if run else ""
+        time_suffix = get_time_suffix(display_name)
         slug = self.student_name.lower().replace(" ", "_")
         return f"{slug}_bus{time_suffix}"
 
@@ -193,7 +197,8 @@ class MyRideStudentBusTracker(CoordinatorEntity[MyRideDataUpdateCoordinator], Tr
         attrs["assigned_vehicle_id"] = vehicle_id
         if run:
             attrs["bus_number"] = get_field(run, "busNumber")
-            attrs["route_name"] = get_run_display_name(run) or get_field(run, "runName") or get_field(run, "runDescription")
+            all_runs = self._get_all_runs()
+            attrs["route_name"] = get_run_display_name(run, all_runs) or get_field(run, "runName") or get_field(run, "runDescription")
             attrs["driver_name"] = get_field(run, "driverName") or get_field(run, "rolloutDriverName")
 
         if not bus:

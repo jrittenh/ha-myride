@@ -1,6 +1,8 @@
 """Constants for the My Ride K-12 integration."""
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import math
+import re
+from datetime import datetime
 import homeassistant.util.dt as dt_util
 
 DOMAIN = "myride"
@@ -64,7 +66,63 @@ def get_field(d: Any, key: str, default: Any = None) -> Any:
     return default
 
 
-def get_run_display_name(run: Any) -> str:
+def get_time_suffix(display_name: str) -> str:
+    """Return entity ID suffix ('_am', '_pm', or cleaned name) from display name."""
+    if not display_name:
+        return ""
+    # Use word boundaries so words containing 'am' (e.g. 'campus', 'program', 'oakham') don't falsely match
+    is_am = bool(re.search(r"\b(am|morning|pickup)\b", display_name, re.IGNORECASE))
+    is_pm = bool(re.search(r"\b(pm|afternoon|dropoff)\b", display_name, re.IGNORECASE))
+
+    if is_am and not is_pm:
+        return "_am"
+    if is_pm and not is_am:
+        return "_pm"
+    if re.search(r"\b(pm)\b", display_name, re.IGNORECASE):
+        return "_pm"
+    if re.search(r"\b(am)\b", display_name, re.IGNORECASE):
+        return "_am"
+
+    cleaned = re.sub(r"[^\w\s-]", "", display_name).strip().lower()
+    cleaned = re.sub(r"[-\s]+", "_", cleaned)
+    return f"_{cleaned}" if cleaned else ""
+
+
+def _extract_earliest_stop_time(run: Any) -> Optional[int]:
+    """Extract earliest stop planned time in minutes from midnight (wall-clock)."""
+    stops = get_field(run, "stopsInfo", [])
+    if not isinstance(stops, list):
+        return None
+    earliest_mins: Optional[int] = None
+    for stop in stops:
+        time_str = get_field(stop, "plannedStopTime") or get_field(stop, "stopTime")
+        if not time_str:
+            continue
+        try:
+            dt = dt_util.parse_datetime(str(time_str))
+            if dt:
+                mins = dt.hour * 60 + dt.minute
+                if earliest_mins is None or mins < earliest_mins:
+                    earliest_mins = mins
+                continue
+        except Exception:
+            pass
+
+        time_s = str(time_str)
+        if ":" in time_s:
+            try:
+                parts = time_s.split("T")[-1].split(":")
+                hour = int(parts[0])
+                minute = int(parts[1]) if len(parts) > 1 else 0
+                mins = hour * 60 + minute
+                if earliest_mins is None or mins < earliest_mins:
+                    earliest_mins = mins
+            except Exception:
+                pass
+    return earliest_mins
+
+
+def get_run_display_name(run: Any, all_runs: Optional[List[Any]] = None) -> str:
     """Return a descriptive label for a run, guaranteeing AM/PM distinction."""
     if not isinstance(run, dict):
         return ""
@@ -78,42 +136,37 @@ def get_run_display_name(run: Any) -> str:
     )
     name = str(name).strip()
 
-    # If name already explicitly contains AM, PM, Morning, Afternoon, etc.
-    lower_name = name.lower()
-    has_am_pm = any(
-        k in lower_name
-        for k in (
-            " am", " pm", "(am)", "(pm)", "am ", "pm ",
-            "morning", "afternoon", "pickup", "pick up",
-            "dropoff", "drop off"
-        )
-    )
+    # Check if name already explicitly contains AM, PM, Morning, Afternoon, etc. using word boundaries
+    has_am = bool(re.search(r"\b(am|morning|pickup)\b", name, re.IGNORECASE))
+    has_pm = bool(re.search(r"\b(pm|afternoon|dropoff)\b", name, re.IGNORECASE))
+    has_explicit_label = has_am or has_pm
 
-    # 2. Inspect stops to determine AM vs PM by planned schedule
+    # 2. Determine time hint (AM vs PM)
     time_hint = ""
-    stops = get_field(run, "stopsInfo", [])
-    if isinstance(stops, list):
-        for stop in stops:
-            time_str = get_field(stop, "plannedStopTime") or get_field(stop, "stopTime")
-            if time_str:
-                try:
-                    dt = dt_util.parse_datetime(str(time_str))
-                    if dt:
-                        time_hint = "AM" if dt.hour < 12 else "PM"
-                        break
-                except Exception:
-                    pass
-                # Handle raw "07:35:00" or similar time format
-                time_s = str(time_str)
-                if ":" in time_s:
-                    try:
-                        hour = int(time_s.split(":")[0].split("T")[-1])
-                        time_hint = "AM" if hour < 12 else "PM"
-                        break
-                    except Exception:
-                        pass
+    current_mins = _extract_earliest_stop_time(run)
 
-    # 3. Check runType if provided
+    # 2a. Relative comparison if multiple runs exist for this student
+    if all_runs and isinstance(all_runs, list) and len(all_runs) >= 2:
+        current_id = get_field(run, "runId")
+        other_runs = [
+            r for r in all_runs
+            if isinstance(r, dict) and (get_field(r, "runId") != current_id or r is not run)
+        ]
+        if other_runs:
+            other_run = other_runs[0]
+            other_mins = _extract_earliest_stop_time(other_run)
+            if current_mins is not None and other_mins is not None and current_mins != other_mins:
+                time_hint = "AM" if current_mins < other_mins else "PM"
+            elif current_mins is not None and other_mins is None:
+                time_hint = "AM" if current_mins < 12 * 60 else "PM"
+            elif current_mins is None and other_mins is not None:
+                time_hint = "PM" if other_mins < 12 * 60 else "AM"
+
+    # 2b. Standalone schedule inspection if time_hint not yet resolved
+    if not time_hint and current_mins is not None:
+        time_hint = "AM" if current_mins < 12 * 60 else "PM"
+
+    # 2c. Check runType if stops schedule did not resolve
     if not time_hint:
         run_type = str(get_field(run, "runType") or "").upper()
         if "AM" in run_type or run_type == "1":
@@ -122,7 +175,7 @@ def get_run_display_name(run: Any) -> str:
             time_hint = "PM"
 
     if name:
-        if has_am_pm or not time_hint:
+        if has_explicit_label or not time_hint:
             return name
         return f"{name} {time_hint}"
 

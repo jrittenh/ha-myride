@@ -246,3 +246,55 @@ async def test_async_migrate_entity_ids():
     mock_reg.async_update_entity.assert_any_call("device_tracker.jane_doe_bus_2", new_entity_id="device_tracker.jane_doe_bus_pm")
 
 
+@pytest.mark.asyncio
+async def test_async_migrate_entity_ids_route_name_with_am_word():
+    """Test _async_migrate_entity_ids does not name a PM route _am just because name contains 'am'."""
+    from custom_components.myride.__init__ import _async_migrate_entity_ids
+    from homeassistant.helpers import entity_registry as er
+
+    mock_hass = MagicMock()
+    mock_entry = MagicMock()
+    mock_entry.entry_id = "test_entry"
+
+    students = [
+        {
+            "StudentId": 222,
+            "FirstName": "Alex",
+            "LastName": "Smith",
+            "RunInfo": [
+                {
+                    "RunId": 201,
+                    "RunName": "Campus",
+                    "StopsInfo": [{"plannedStopTime": "2026-10-28T07:45:00Z"}],
+                },
+                {
+                    "RunId": 202,
+                    "RunName": "Campus",
+                    "StopsInfo": [{"plannedStopTime": "2026-10-28T15:15:00Z"}],
+                }
+            ]
+        }
+    ]
+
+    mock_reg = MagicMock()
+    er.async_get.return_value = mock_reg
+
+    # Existing entries with legacy names
+    am_tracker = MagicMock()
+    am_tracker.unique_id = "myride_222_201_bus_tracker"
+    am_tracker.entity_id = "device_tracker.alex_smith_bus"
+
+    pm_tracker = MagicMock()
+    pm_tracker.unique_id = "myride_222_202_bus_tracker"
+    pm_tracker.entity_id = "device_tracker.alex_smith_bus_2"
+
+    er.async_entries_for_config_entry.return_value = [am_tracker, pm_tracker]
+    mock_reg.async_get.return_value = None
+
+    _async_migrate_entity_ids(mock_hass, mock_entry, students)
+
+    mock_reg.async_update_entity.assert_any_call("device_tracker.alex_smith_bus", new_entity_id="device_tracker.alex_smith_bus_am")
+    mock_reg.async_update_entity.assert_any_call("device_tracker.alex_smith_bus_2", new_entity_id="device_tracker.alex_smith_bus_pm")
+
+
+
