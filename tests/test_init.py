@@ -195,3 +195,54 @@ async def test_coordinator_live_eta_preservation():
         assert stop["tylerEta"] == "2026-08-24T08:05:00Z"
         assert stop["etaMinutes"] == 15
 
+@pytest.mark.asyncio
+async def test_async_migrate_entity_ids():
+    """Test _async_migrate_entity_ids renames collision _2 and unadorned entity IDs to _am and _pm."""
+    from custom_components.myride.__init__ import _async_migrate_entity_ids
+    from homeassistant.helpers import entity_registry as er
+
+    mock_hass = MagicMock()
+    mock_entry = MagicMock()
+    mock_entry.entry_id = "test_entry"
+
+    students = [
+        {
+            "StudentId": 111,
+            "FirstName": "Jane",
+            "LastName": "Doe",
+            "RunInfo": [
+                {
+                    "RunId": 101,
+                    "RunName": "",
+                    "StopsInfo": [{"plannedStopTime": "2026-10-28T07:30:00Z"}],
+                },
+                {
+                    "RunId": 102,
+                    "RunName": "",
+                    "StopsInfo": [{"plannedStopTime": "2026-10-28T15:00:00Z"}],
+                }
+            ]
+        }
+    ]
+
+    mock_reg = MagicMock()
+    er.async_get.return_value = mock_reg
+
+    # Existing entries with legacy names and _2 collision
+    am_tracker = MagicMock()
+    am_tracker.unique_id = "myride_111_101_bus_tracker"
+    am_tracker.entity_id = "device_tracker.jane_doe_bus"
+
+    pm_tracker = MagicMock()
+    pm_tracker.unique_id = "myride_111_102_bus_tracker"
+    pm_tracker.entity_id = "device_tracker.jane_doe_bus_2"
+
+    er.async_entries_for_config_entry.return_value = [am_tracker, pm_tracker]
+    mock_reg.async_get.return_value = None  # target IDs not in use
+
+    _async_migrate_entity_ids(mock_hass, mock_entry, students)
+
+    mock_reg.async_update_entity.assert_any_call("device_tracker.jane_doe_bus", new_entity_id="device_tracker.jane_doe_bus_am")
+    mock_reg.async_update_entity.assert_any_call("device_tracker.jane_doe_bus_2", new_entity_id="device_tracker.jane_doe_bus_pm")
+
+

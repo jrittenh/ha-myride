@@ -24,6 +24,7 @@ from .const import (
     meters_to_miles,
     meters_to_feet,
     get_field,
+    get_run_display_name,
 )
 from .api import MyRideAPI, MyRideAuthError, MyRideAPIError
 
@@ -31,6 +32,74 @@ from .api import MyRideAPI, MyRideAuthError, MyRideAPIError
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.SENSOR, Platform.DEVICE_TRACKER]
+
+
+def _async_migrate_entity_ids(hass: HomeAssistant, entry: ConfigEntry, students: list) -> None:
+    """Migrate entity IDs to clean _am / _pm suffixes, eliminating _2 collisions."""
+    try:
+        from homeassistant.helpers import entity_registry as er
+
+        registry = er.async_get(hass)
+        entries = er.async_entries_for_config_entry(registry, entry.entry_id)
+
+        target_map: Dict[str, str] = {}
+        for student in students:
+            student_id = get_field(student, "studentId")
+            first = get_field(student, "firstName", "")
+            last = get_field(student, "lastName", "")
+            student_name = f"{first} {last}".strip()
+            slug = student_name.lower().replace(" ", "_")
+
+            for run in get_field(student, "runInfo", []):
+                run_id = get_field(run, "runId")
+                if student_id is None or run_id is None:
+                    continue
+
+                display_name = get_run_display_name(run)
+                time_suffix = ""
+                if "am" in display_name.lower():
+                    time_suffix = "_am"
+                elif "pm" in display_name.lower():
+                    time_suffix = "_pm"
+                elif display_name:
+                    time_suffix = f"_{display_name.lower().replace(' ', '_')}"
+
+                target_map[f"myride_{student_id}_{run_id}_bus_tracker"] = f"device_tracker.{slug}_bus{time_suffix}"
+                target_map[f"myride_{student_id}_{run_id}_next_stop"] = f"sensor.{slug}_next_bus_stop{time_suffix}"
+                target_map[f"myride_{student_id}_{run_id}_bus_status"] = f"sensor.{slug}_bus_status{time_suffix}"
+                target_map[f"myride_{student_id}_{run_id}_distance"] = f"sensor.{slug}_bus_distance_to_next_stop{time_suffix}"
+
+        for reg_entry in entries:
+            target_id = target_map.get(reg_entry.unique_id)
+            if not target_id:
+                continue
+
+            if reg_entry.entity_id != target_id:
+                existing = registry.async_get(target_id)
+                if existing is not None and existing.entity_id != reg_entry.entity_id:
+                    _LOGGER.debug(
+                        "Target entity ID %s already in use; skipping migration for %s",
+                        target_id,
+                        reg_entry.entity_id,
+                    )
+                    continue
+
+                _LOGGER.info(
+                    "Migrating entity ID from %s to %s",
+                    reg_entry.entity_id,
+                    target_id,
+                )
+                try:
+                    registry.async_update_entity(reg_entry.entity_id, new_entity_id=target_id)
+                except Exception as err:
+                    _LOGGER.warning(
+                        "Could not migrate entity ID %s to %s: %s",
+                        reg_entry.entity_id,
+                        target_id,
+                        err,
+                    )
+    except Exception as err:
+        _LOGGER.debug("Entity ID migration skipped: %s", err)
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up My Ride K-12 from a config entry."""
@@ -55,6 +124,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+
+    # Migrate legacy entity IDs (e.g. *_2) to specific _am / _pm suffixes
+    students = get_field(coordinator.data, "students", [])
+    _async_migrate_entity_ids(hass, entry, students)
 
     # Start the real-time SignalR WebSocket listener
     coordinator.start_signalr()
